@@ -2,3 +2,4 @@ supabase
 pandas
 plotly
 openpyxl
+python-dotenv
