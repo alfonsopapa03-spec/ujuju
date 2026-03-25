@@ -179,16 +179,3 @@ elif menu == "Registrar Movimiento":
                         "user_id": user_id  # 👈 también aquí
                     }).execute()
                     st.success(f"✅ Nuevo stock: {nueva_cantidad}")
-```
-
----
-
-## Cómo funciona la seguridad en capas
-```
-Usuario A hace una consulta
-        ↓
-  Streamlit envía el token JWT del usuario a Supabase
-        ↓
-  Supabase evalúa: ¿auth.uid() == user_id del registro?
-        ↓
-  SÍ → devuelve datos      NO → devuelve vacío (ni error, simplemente no existe)
