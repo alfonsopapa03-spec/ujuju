@@ -1,15 +1,17 @@
 import streamlit as st
 from supabase import create_client
-import pandas as pd
-import plotly.express as px
-from dotenv import load_dotenv
 import os
 
-load_dotenv()
+# Borra o comenta las líneas de dotenv si las tenías
+# from dotenv import load_dotenv
+# load_dotenv()
 
 @st.cache_resource
 def init_supabase():
-    return create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+    # Usamos st.secrets para obtener las llaves de forma segura
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 supabase = init_supabase()
 
