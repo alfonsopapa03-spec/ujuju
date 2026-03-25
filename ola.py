@@ -179,3 +179,35 @@ elif menu == "Registrar Movimiento":
                         "user_id": user_id  # 👈 también aquí
                     }).execute()
                     st.success(f"✅ Nuevo stock: {nueva_cantidad}")
+import streamlit as st
+from supabase import create_client, Client
+
+# 1. Instalación (asegúrate de hacer: pip install supabase)
+
+# 2. Inicializar la conexión usando los secretos
+@st.cache_resource
+def init_connection():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+supabase = init_connection()
+
+# 3. Ejemplo de cómo guardar un producto vinculado al usuario actual
+def guardar_producto(nombre, cantidad):
+    # Obtenemos el ID del usuario que inició sesión
+    user = supabase.auth.get_user()
+    if user:
+        user_id = user.user.id
+        data = {
+            "nombre": nombre,
+            "cantidad": cantidad,
+            "user_id": user_id  # Importante para que el RLS funcione
+        }
+        res = supabase.table("inventario").insert(data).execute()
+        return res
+
+# 4. Ejemplo de cómo leer (Supabase filtrará automáticamente por el RLS)
+def leer_inventario():
+    res = supabase.table("inventario").select("*").execute()
+    return res.data
