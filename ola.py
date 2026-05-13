@@ -21,15 +21,15 @@ SUPABASE_DB_URL = "postgresql://postgres.ntnpckmbyfmjhfskfwyu:Conejito100#@aws-1
 
 # ==================== CATÁLOGO PLACAS / CONDUCTORES ====================
 PLACA_CONDUCTOR = {
-    "PLACA01": "Jose",
-    "PLACA02": "Jesus",
-    "PLACA03": "Alberto",
-    "PLACA04": "Alvaro",
-    "PLACA05": "Nilson",
-    "PLACA06": "Luis",
-    "PLACA07": "Guillermo",
-    "PLACA08": "Giovanny",
-    "PLACA09": "LEAL",
+    "WCP116": "Jose",
+    "SKL440": "Jesus",
+    "SVB345": "Alberto",
+    "VEB931": "Alvaro",
+    "XIC344": "Nilson",
+    "SMD925": "Luis",
+    "SRE493": "Guillermo",
+    "VAG227": "Giovanny",
+    "SOD747": "LEAL",
 }  # <-- EDITA PLACAS AQUÍ
 
 TODOS_CONDUCTORES = sorted([
