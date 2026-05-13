@@ -284,6 +284,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+@st.cache_resource(show_spinner=False)
+def _get_raw_connection(url: str):
+    """Conexión persistente reutilizada entre re-renders. Se reconecta automáticamente si falla."""
+    return psycopg2.connect(url)
+
+@st.cache_resource(show_spinner=False)
+def get_db():
+    """Instancia única de DB por sesión de servidor — evita re-inicializar la BD en cada re-render."""
+    return DB()
+
 # ==================== BASE DE DATOS ====================
 class DB:
     def __init__(self):
@@ -291,11 +301,20 @@ class DB:
         self.init()
 
     def conn(self):
-        return psycopg2.connect(self.url)
+        # Intenta reusar la conexión cacheada; si está cerrada o muerta, reconecta
+        try:
+            c = _get_raw_connection(self.url)
+            c.cursor().execute("SELECT 1")
+            return c
+        except Exception:
+            _get_raw_connection.clear()
+            return _get_raw_connection(self.url)
 
     def init(self):
+        if st.session_state.get("_db_init_done"):
+            return
         try:
-            c = self.conn()
+            c = psycopg2.connect(self.url)  # conexión directa en el init para evitar recursión
             cur = c.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS jp_viajes (
@@ -358,6 +377,7 @@ class DB:
                     try: c.rollback()
                     except: pass
             c.commit(); c.close()
+            st.session_state["_db_init_done"] = True
         except Exception as e:
             st.error(f"Error DB init: {e}")
 
@@ -570,7 +590,30 @@ class DB:
             c.close()
 
 
-# ==================== HELPERS ====================
+# ==================== CACHÉ DE CONSULTAS ====================
+# El underscore en _db hace que st.cache_data no intente hashear el objeto DB
+@st.cache_data(ttl=30, show_spinner=False)
+def q_obtener_viajes(_db, fecha_ini=None, fecha_fin=None, placa=None,
+                     conductor=None, cliente=None, estado=None,
+                     manifiesto=None, numero_factura=None):
+    return _db.obtener_viajes(fecha_ini, fecha_fin, placa, conductor,
+                               cliente, estado, manifiesto, numero_factura)
+
+@st.cache_data(ttl=30, show_spinner=False)
+def q_stats_dashboard(_db, fecha_ini, fecha_fin):
+    return _db.stats_dashboard(fecha_ini, fecha_fin)
+
+@st.cache_data(ttl=30, show_spinner=False)
+def q_obtener_tanqueos(_db, placa=None, fecha_ini=None, fecha_fin=None):
+    return _db.obtener_tanqueos(placa, fecha_ini, fecha_fin)
+
+@st.cache_data(ttl=30, show_spinner=False)
+def q_saldo_combustible_placa(_db, placa: str):
+    return _db.saldo_combustible_placa(placa)
+
+def limpiar_cache():
+    """Llama esto después de cualquier escritura para que los datos se refresquen."""
+    st.cache_data.clear()
 def hora_a_time(val):
     if val is None or (isinstance(val, float) and pd.isna(val)): return None
     if isinstance(val, time): return val
@@ -1011,12 +1054,10 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    if "db" not in st.session_state:
-        st.session_state.db = DB()
     if "editando_id" not in st.session_state:
         st.session_state.editando_id = None
 
-    db = st.session_state.db
+    db = get_db()
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📝 Nuevo Viaje",
@@ -1134,6 +1175,7 @@ def main():
                     "combustible_galones": comb_gal_pre,
                 }
                 if db.guardar_viaje(datos):
+                    limpiar_cache()
                     st.success(f"✅ Viaje guardado — {placa} | {conductor} | {origen} → {destino} | Flete: {fmt_moneda(flete_pre)}")
                     st.balloons()
 
@@ -1158,7 +1200,7 @@ def main():
             with f7: f_manifiesto = st.text_input("📋 Manifiesto", key="h_manifiesto", placeholder="Buscar por manifiesto...")
             with f8: f_factura    = st.text_input("🧾 Nº Factura",  key="h_factura",    placeholder="Buscar por factura...")
 
-        df = db.obtener_viajes(fi, ff, fp, fc, fcli,
+        df = q_obtener_viajes(db, fi, ff, fp, fc, fcli,
                                fe if fe != "Todos" else None,
                                f_manifiesto or None,
                                f_factura or None)
@@ -1248,7 +1290,7 @@ def main():
                             st.session_state.editando_id = vid; st.rerun()
                     with bc2:
                         if st.button("🗑️ Eliminar", key=f"del_{vid}"):
-                            db.eliminar_viaje(vid); st.success("Eliminado."); st.rerun()
+                            db.eliminar_viaje(vid); limpiar_cache(); st.success("Eliminado."); st.rerun()
                 else:
                     st.markdown("#### ✏️ Editando viaje")
                     ec1, ec2, ec3, ec4 = st.columns(4)
@@ -1337,6 +1379,7 @@ def main():
                             "combustible_galones": e_comb_gal,
                         }
                         if db.actualizar_viaje(vid, datos_edit):
+                            limpiar_cache()
                             st.success("✅ Viaje actualizado.")
                             st.session_state.editando_id = None; st.rerun()
                     if cancelar:
@@ -1358,7 +1401,7 @@ def main():
                 st.info("Selecciona un rango de fechas completo.")
                 return
 
-            df_s = db.stats_dashboard(rango[0], rango[1])
+            df_s = q_stats_dashboard(db, rango[0], rango[1])
             if df_s.empty:
                 st.info("No hay datos en este período.")
                 return
@@ -1473,7 +1516,7 @@ def main():
                 with tc1: t_fi = st.date_input("Desde", datetime.now() - timedelta(days=90), key="t_fi")
                 with tc2: t_ff = st.date_input("Hasta", datetime.now(), key="t_ff")
 
-            df_cond_t = db.obtener_viajes(fecha_ini=t_fi, fecha_fin=t_ff, conductor=conductor_sel_t)
+            df_cond_t = q_obtener_viajes(db, fecha_ini=t_fi, fecha_fin=t_ff, conductor=conductor_sel_t)
 
             if not df_cond_t.empty:
                 total_c    = len(df_cond_t)
@@ -1557,7 +1600,7 @@ def main():
                 with tv1: v_fi = st.date_input("Desde", datetime.now() - timedelta(days=90), key="v_fi")
                 with tv2: v_ff = st.date_input("Hasta", datetime.now(), key="v_ff")
 
-            df_veh_t = db.obtener_viajes(fecha_ini=v_fi, fecha_fin=v_ff, placa=placa_sel_t)
+            df_veh_t = q_obtener_viajes(db, fecha_ini=v_fi, fecha_fin=v_ff, placa=placa_sel_t)
 
             if not df_veh_t.empty:
                 total_v       = len(df_veh_t)
@@ -1662,6 +1705,7 @@ def main():
                         "observacion": t_obs,
                     }
                     if db.guardar_tanqueo(datos_t):
+                        limpiar_cache()
                         st.success(f"✅ Tanqueo registrado — {t_placa} | {t_galones} gal | {fmt_moneda(t_costo_int)}")
                         st.rerun()
 
@@ -1673,7 +1717,8 @@ def main():
                 with ht2: ht_fi    = st.date_input("Desde", datetime.now() - timedelta(days=90), key="ht_fi")
                 with ht3: ht_ff    = st.date_input("Hasta", datetime.now(), key="ht_ff")
 
-            df_tanqueos = db.obtener_tanqueos(
+            df_tanqueos = q_obtener_tanqueos(
+                db,
                 placa=ht_placa if ht_placa != "Todas" else None,
                 fecha_ini=ht_fi, fecha_fin=ht_ff
             )
@@ -1692,6 +1737,7 @@ def main():
                 if st.button("🗑️ Eliminar tanqueo seleccionado", key="btn_del_tanqueo"):
                     tid = int(sel_del_t.split(" | ")[0].replace("ID ", ""))
                     if db.eliminar_tanqueo(tid):
+                        limpiar_cache()
                         st.success("Tanqueo eliminado."); st.rerun()
             else:
                 st.info("No hay tanqueos registrados con esos filtros.")
@@ -1701,7 +1747,7 @@ def main():
 
             resumen_rows = []
             for placa_k in PLACA_CONDUCTOR.keys():
-                saldo_info = db.saldo_combustible_placa(placa_k)
+                saldo_info = q_saldo_combustible_placa(db, placa_k)
                 resumen_rows.append({
                     "Placa": placa_k,
                     "Conductor": PLACA_CONDUCTOR[placa_k],
@@ -1729,7 +1775,7 @@ def main():
             st.divider()
             st.markdown("##### Detalle por vehículo")
             placa_det = st.selectbox("Ver detalle de placa:", list(PLACA_CONDUCTOR.keys()), key="comb_det_placa")
-            saldo_det = db.saldo_combustible_placa(placa_det)
+            saldo_det = q_saldo_combustible_placa(db, placa_det)
 
             saldo_val = saldo_det["saldo"]
             cls_saldo = "saldo-alto" if saldo_val > 20 else ("saldo-medio" if saldo_val > 5 else "saldo-bajo")
