@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # ==================== CREDENCIALES ====================
-SUPABASE_DB_URL = "postgresql://USUARIO:CONTRASEÑA@HOST:6543/postgres"  # <-- CAMBIA AQUÍ
+SUPABASE_DB_URL = "postgresql://postgres.ntnpckmbyfmjhfskfwyu:Conejito100#@aws-1-us-east-1.pooler.supabase.com:6543/postgres"  # <-- CAMBIA AQUÍ
 
 # ==================== CATÁLOGO PLACAS / CONDUCTORES ====================
 PLACA_CONDUCTOR = {
