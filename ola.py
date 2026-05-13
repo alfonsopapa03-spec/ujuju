@@ -1790,6 +1790,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-ENDOFFILE
-echo "Archivo creado exitosamente"
-wc -l /mnt/user-data/outputs/app.py
