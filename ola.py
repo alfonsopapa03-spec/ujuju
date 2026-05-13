@@ -691,29 +691,34 @@ def widget_liquidacion(flete, comision, bono, combustible_pesos, combustible_gal
     """
     Liquidación = Flete - Comisión SOLAMENTE.
     Bono y combustible se muestran como datos informativos, NO restan.
+    Nota: se usan entidades HTML en lugar de emojis y caracteres especiales
+    para evitar que el parser de markdown de Streamlit corte el HTML.
     """
-    utilidad = int(flete or 0) - int(comision or 0)
+    utilidad   = int(flete or 0) - int(comision or 0)
     color_util = "#2ecc71" if utilidad >= 0 else "#e74c3c"
+    show_bono  = "flex" if int(bono or 0) > 0 else "none"
+    show_comb  = "flex" if (int(combustible_pesos or 0) > 0 or float(combustible_galones or 0) > 0) else "none"
+    gal_txt    = f"{float(combustible_galones or 0):.2f} gal" if float(combustible_galones or 0) > 0 else ""
+    gal_sep    = " &middot; " if gal_txt else ""
 
-    bono_html = ""
-    if int(bono or 0) > 0:
-        bono_html = f'<div class="liq-row"><span>🌙 Bono transporte <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span><span style="color:#f39c12;">{fmt_moneda(bono)}</span></div>'
-
-    comb_html = ""
-    if int(combustible_pesos or 0) > 0 or float(combustible_galones or 0) > 0:
-        gal_txt = f" · {float(combustible_galones or 0):.2f} gal" if float(combustible_galones or 0) > 0 else ""
-        comb_html = f'<div class="liq-row"><span>⛽ Combustible{gal_txt} <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span><span style="color:#8892b0;">{fmt_moneda(combustible_pesos)}</span></div>'
-
-    st.markdown(f"""
-    <div class="liquidacion-box">
-        <div style="font-family:'Rajdhani',sans-serif;font-size:0.75rem;color:#e94560;letter-spacing:2px;margin-bottom:8px;">LIQUIDACIÓN DEL VIAJE</div>
-        <div class="liq-row"><span>🚚 Flete</span><span style="color:#2ecc71;">{fmt_moneda(flete)}</span></div>
-        <div class="liq-row"><span>👤 Comisión conductor</span><span style="color:#e74c3c;">- {fmt_moneda(comision)}</span></div>
-        <div class="liq-total"><span>💰 Utilidad (Flete − Comisión)</span><span style="color:{color_util};">{fmt_moneda(utilidad)}</span></div>
-        {bono_html}
-        {comb_html}
-    </div>
-    """, unsafe_allow_html=True)
+    html = (
+        '<div class="liquidacion-box">'
+        '<div style="font-family:Rajdhani,sans-serif;font-size:0.75rem;color:#e94560;letter-spacing:2px;margin-bottom:8px;">LIQUIDACION DEL VIAJE</div>'
+        '<div class="liq-row"><span>&#128666; Flete</span>'
+        f'<span style="color:#2ecc71;">{fmt_moneda(flete)}</span></div>'
+        '<div class="liq-row"><span>&#128100; Comision conductor</span>'
+        f'<span style="color:#e74c3c;">- {fmt_moneda(comision)}</span></div>'
+        '<div class="liq-total"><span>&#128176; Utilidad (Flete - Comision)</span>'
+        f'<span style="color:{color_util};">{fmt_moneda(utilidad)}</span></div>'
+        f'<div class="liq-row" style="display:{show_bono};">'
+        f'<span>&#127769; Bono transporte <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span>'
+        f'<span style="color:#f39c12;">{fmt_moneda(bono)}</span></div>'
+        f'<div class="liq-row" style="display:{show_comb};">'
+        f'<span>&#9981; Combustible{gal_sep}{gal_txt} <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span>'
+        f'<span style="color:#8892b0;">{fmt_moneda(combustible_pesos)}</span></div>'
+        '</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 # ==================== EXCEL ====================
 def generar_excel(df: pd.DataFrame, titulo: str = "JP Transportamos") -> bytes:
