@@ -327,7 +327,6 @@ class DB:
                     combustible_galones NUMERIC(8,2) DEFAULT 0
                 )
             """)
-            # Tabla de tanqueos
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS jp_tanqueos (
                     id SERIAL PRIMARY KEY,
@@ -350,7 +349,6 @@ class DB:
                 "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_salida_cargue INTEGER DEFAULT 0",
                 "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_llegada_descargue INTEGER DEFAULT 0",
                 "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_salida_descargue INTEGER DEFAULT 0",
-                # migrar columna antigua combustible → combustible_pesos si existe
                 "ALTER TABLE jp_viajes RENAME COLUMN combustible TO combustible_pesos",
             ]
             for m in migraciones:
@@ -531,11 +529,6 @@ class DB:
         finally: c.close()
 
     def saldo_combustible_placa(self, placa: str) -> dict:
-        """
-        Retorna el saldo de galones actual para una placa:
-        total tanqueado - total consumido en viajes
-        También retorna el historial combinado ordenado por fecha.
-        """
         c = self.conn()
         try:
             df_t = pd.read_sql(
@@ -550,11 +543,9 @@ class DB:
             total_consumido = float(df_v["galones"].sum()) if not df_v.empty else 0.0
             saldo = total_tanqueado - total_consumido
 
-            # historial combinado
             if not df_t.empty or not df_v.empty:
                 df_hist = pd.concat([df_t, df_v], ignore_index=True)
                 df_hist = df_hist.sort_values("fecha").reset_index(drop=True)
-                # calcular saldo acumulado
                 saldo_acum = []
                 acum = 0.0
                 for _, row in df_hist.iterrows():
@@ -661,24 +652,14 @@ def widget_liquidacion(flete, comision, bono, combustible_pesos, combustible_gal
     utilidad = int(flete or 0) - int(comision or 0)
     color_util = "#2ecc71" if utilidad >= 0 else "#e74c3c"
 
-    # Bono informativo
     bono_html = ""
     if int(bono or 0) > 0:
-        bono_html = f"""
-        <div class="liq-row">
-            <span>🌙 Bono transporte <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span>
-            <span style="color:#f39c12;">{fmt_moneda(bono)}</span>
-        </div>"""
+        bono_html = f'<div class="liq-row"><span>🌙 Bono transporte <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span><span style="color:#f39c12;">{fmt_moneda(bono)}</span></div>'
 
-    # Combustible informativo — con galones si se ingresaron
     comb_html = ""
     if int(combustible_pesos or 0) > 0 or float(combustible_galones or 0) > 0:
         gal_txt = f" · {float(combustible_galones or 0):.2f} gal" if float(combustible_galones or 0) > 0 else ""
-        comb_html = f"""
-        <div class="liq-row">
-            <span>⛽ Combustible{gal_txt} <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span>
-            <span style="color:#8892b0;">{fmt_moneda(combustible_pesos)}</span>
-        </div>"""
+        comb_html = f'<div class="liq-row"><span>⛽ Combustible{gal_txt} <span style="font-size:0.72rem;color:#8892b0;">(informativo)</span></span><span style="color:#8892b0;">{fmt_moneda(combustible_pesos)}</span></div>'
 
     st.markdown(f"""
     <div class="liquidacion-box">
@@ -1638,7 +1619,6 @@ def main():
 
         comb_tab1, comb_tab2 = st.tabs(["🛢️ Registrar Tanqueo", "📊 Saldo y Trazabilidad"])
 
-        # ---- REGISTRAR TANQUEO ----
         with comb_tab1:
             st.markdown("#### Nuevo Tanqueo")
             with st.form("form_tanqueo", clear_on_submit=True):
@@ -1685,7 +1665,6 @@ def main():
                         st.success(f"✅ Tanqueo registrado — {t_placa} | {t_galones} gal | {fmt_moneda(t_costo_int)}")
                         st.rerun()
 
-            # Historial de tanqueos
             st.divider()
             st.markdown("#### 📋 Historial de Tanqueos")
             with st.expander("Filtros tanqueos", expanded=False):
@@ -1703,7 +1682,6 @@ def main():
                     df_tanqueos[["id","fecha","placa","conductor","galones","costo_pesos","observacion"]],
                     use_container_width=True, hide_index=True
                 )
-                # Eliminar tanqueo
                 st.markdown("**Eliminar tanqueo:**")
                 tanqueo_ids = df_tanqueos["id"].tolist()
                 tanqueo_labels = df_tanqueos.apply(
@@ -1718,11 +1696,9 @@ def main():
             else:
                 st.info("No hay tanqueos registrados con esos filtros.")
 
-        # ---- SALDO Y TRAZABILIDAD COMBUSTIBLE ----
         with comb_tab2:
             st.markdown("#### 📊 Saldo de Combustible por Vehículo")
 
-            # Resumen de todas las placas
             resumen_rows = []
             for placa_k in PLACA_CONDUCTOR.keys():
                 saldo_info = db.saldo_combustible_placa(placa_k)
@@ -1735,7 +1711,6 @@ def main():
                 })
             df_resumen = pd.DataFrame(resumen_rows)
 
-            # Mostrar tabla resumen con color según saldo
             st.markdown("##### Resumen general de flotilla")
             for _, row_r in df_resumen.iterrows():
                 saldo = row_r["Saldo Actual (gal)"]
@@ -1792,7 +1767,6 @@ def main():
                     use_container_width=True, hide_index=True
                 )
 
-                # Gráfica de saldo acumulado
                 try:
                     import plotly.express as px
                     fig_saldo = px.line(
@@ -1816,3 +1790,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+ENDOFFILE
+echo "Archivo creado exitosamente"
+wc -l /mnt/user-data/outputs/app.py
