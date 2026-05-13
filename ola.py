@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # ==================== CREDENCIALES ====================
-SUPABASE_DB_URL = "postgresql://postgres.ntnpckmbyfmjhfskfwyu:Conejito100#@aws-1-us-east-1.pooler.supabase.com:6543/postgres"  # <-- CAMBIA AQUÍ
+SUPABASE_DB_URL = "postgresql://USUARIO:CONTRASEÑA@HOST:6543/postgres"  # <-- CAMBIA AQUÍ
 
 # ==================== CATÁLOGO PLACAS / CONDUCTORES ====================
 PLACA_CONDUCTOR = {
@@ -96,13 +96,50 @@ def calcular_bono_transporte(hora_cita) -> int:
     return 0
 
 def fmt_moneda(val) -> str:
-    """Formatea como moneda colombiana."""
+    """Formatea como moneda colombiana: $1.200.000"""
     if val is None:
         return "—"
     try:
         return f"${int(val):,}".replace(",", ".")
     except:
         return "—"
+
+def parse_moneda(texto: str) -> int:
+    """
+    Convierte texto con puntos de miles a entero.
+    Ejemplos: '1.200.000' → 1200000 | '500.000' → 500000 | '1200000' → 1200000
+    """
+    if not texto:
+        return 0
+    try:
+        limpio = texto.strip().replace("$", "").replace(" ", "")
+        # Si tiene puntos pero no coma decimal, son separadores de miles
+        if "." in limpio and "," not in limpio:
+            limpio = limpio.replace(".", "")
+        elif "," in limpio:
+            limpio = limpio.replace(".", "").replace(",", ".")
+        return int(float(limpio))
+    except:
+        return 0
+
+def input_moneda(label: str, key: str, value: int = 0, help_text: str = None) -> int:
+    """
+    Campo de texto que acepta valores con puntos (1.200.000) y devuelve int.
+    Muestra el valor formateado debajo como referencia.
+    """
+    texto = st.text_input(
+        label,
+        value=str(value) if value else "",
+        placeholder="Ej: 1.200.000",
+        key=key,
+        help=help_text or "Escribe el valor con o sin puntos: 1200000 o 1.200.000"
+    )
+    val_int = parse_moneda(texto)
+    if texto and val_int > 0:
+        st.caption(f"✅ {fmt_moneda(val_int)}")
+    elif texto and val_int == 0 and texto.strip() not in ("", "0"):
+        st.caption("⚠️ Valor no reconocido")
+    return val_int
 
 # ==================== CSS ====================
 st.markdown("""
@@ -519,16 +556,31 @@ def widget_horas(prefix, val_cita=None, val_sal_cargue=None,
 
 # ==================== WIDGET LIQUIDACIÓN ====================
 def widget_liquidacion(flete, comision, bono, combustible):
-    utilidad = int(flete or 0) - int(comision or 0) - int(bono or 0) - int(combustible or 0)
+    """
+    Liquidación = Flete - Comisión SOLAMENTE.
+    Bono y combustible se muestran como datos informativos, NO restan.
+    """
+    utilidad = int(flete or 0) - int(comision or 0)
     color_util = "#2ecc71" if utilidad >= 0 else "#e74c3c"
+
+    bono_html = (
+        f"<div class='liq-row'><span>🌙 Bono transporte <span style='font-size:0.72rem;color:#8892b0;'>(informativo)</span></span>"
+        f"<span style='color:#f39c12;'>{fmt_moneda(bono)}</span></div>"
+    ) if int(bono or 0) > 0 else ""
+
+    comb_html = (
+        f"<div class='liq-row'><span>⛽ Combustible <span style='font-size:0.72rem;color:#8892b0;'>(informativo)</span></span>"
+        f"<span style='color:#8892b0;'>{fmt_moneda(combustible)}</span></div>"
+    ) if int(combustible or 0) > 0 else ""
+
     st.markdown(f"""
     <div class="liquidacion-box">
         <div style="font-family:'Rajdhani',sans-serif;font-size:0.75rem;color:#e94560;letter-spacing:2px;margin-bottom:8px;">LIQUIDACIÓN DEL VIAJE</div>
         <div class="liq-row"><span>🚚 Flete</span><span style="color:#2ecc71;">{fmt_moneda(flete)}</span></div>
         <div class="liq-row"><span>👤 Comisión conductor</span><span style="color:#e74c3c;">- {fmt_moneda(comision)}</span></div>
-        <div class="liq-row"><span>🌙 Bono transporte</span><span style="color:#f39c12;">- {fmt_moneda(bono)}</span></div>
-        <div class="liq-row"><span>⛽ Combustible</span><span style="color:#e74c3c;">- {fmt_moneda(combustible)}</span></div>
-        <div class="liq-total"><span>💰 Utilidad Neta</span><span style="color:{color_util};">{fmt_moneda(utilidad)}</span></div>
+        <div class="liq-total"><span>💰 Utilidad (Flete − Comisión)</span><span style="color:{color_util};">{fmt_moneda(utilidad)}</span></div>
+        {bono_html}
+        {comb_html}
     </div>
     """, unsafe_allow_html=True)
 
@@ -627,7 +679,7 @@ def generar_excel(df: pd.DataFrame, titulo: str = "JP Transportamos") -> bytes:
         comision_v  = int(fila.get("comision", 0) or 0)
         bono_v      = int(fila.get("bono_transporte", 0) or 0)
         combustible_v = int(fila.get("combustible", 0) or 0)
-        utilidad_v  = flete_v - comision_v - bono_v - combustible_v
+        utilidad_v  = flete_v - comision_v   # Utilidad = Flete - Comisión SOLO
         tot_flete      += flete_v
         tot_comision   += comision_v
         tot_bono       += bono_v
@@ -658,7 +710,7 @@ def generar_excel(df: pd.DataFrame, titulo: str = "JP Transportamos") -> bytes:
         ws.row_dimensions[row_idx].height = 18
 
     total_row = len(df) + 3
-    tot_utilidad = tot_flete - tot_comision - tot_bono - tot_combustible
+    tot_utilidad = tot_flete - tot_comision  # Utilidad = Flete - Comisión SOLO
     try:
         ws.merge_cells(f"A{total_row}:{get_column_letter(len(columnas))}{total_row}")
     except: pass
@@ -704,7 +756,7 @@ def generar_excel(df: pd.DataFrame, titulo: str = "JP Transportamos") -> bytes:
             t_bono=("bono_transporte","sum"),
             t_comb=("combustible","sum"),
         ).reset_index().sort_values("viajes", ascending=False)
-        df_cond["utilidad"] = df_cond["t_flete"] - df_cond["t_com"] - df_cond["t_bono"] - df_cond["t_comb"]
+        df_cond["utilidad"] = df_cond["t_flete"] - df_cond["t_com"]  # Utilidad = Flete - Comisión
         df_cond["pct"] = df_cond.apply(lambda r: f"{round(r.comp/r.viajes*100,1)}%" if r.viajes > 0 else "0%", axis=1)
 
         for i, r in enumerate(df_cond.itertuples(), start=3):
@@ -745,10 +797,11 @@ def generar_excel(df: pd.DataFrame, titulo: str = "JP Transportamos") -> bytes:
             viajes=("placa","count"),
             comp=("estado", lambda x: x.str.contains("Completado", na=False).sum()),
             t_flete=("flete","sum"),
+            t_com=("comision","sum"),
             t_comb=("combustible","sum"),
             conductores=("conductor", lambda x: ", ".join(x.dropna().unique()[:3])),
         ).reset_index().sort_values("viajes", ascending=False)
-        df_veh["utilidad"] = df_veh["t_flete"] - df_veh["t_comb"]
+        df_veh["utilidad"] = df_veh["t_flete"] - df_veh["t_com"]  # Utilidad = Flete - Comisión
 
         for i, r in enumerate(df_veh.itertuples(), start=3):
             fill_vi = PatternFill("solid", start_color="D6EAF8") if i % 2 == 0 else None
@@ -774,13 +827,15 @@ def generar_excel(df: pd.DataFrame, titulo: str = "JP Transportamos") -> bytes:
 
     kpis_f = [
         ("Total Fletes", tot_flete),
-        ("Total Comisiones", tot_comision),
-        ("Total Bonos Transporte", tot_bono),
-        ("Total Combustible", tot_combustible),
-        ("Utilidad Neta Total", tot_utilidad),
-        ("Margen %", f"{round(tot_utilidad/tot_flete*100,1)}%" if tot_flete > 0 else "0%"),
+        ("Total Comisiones Conductores", tot_comision),
+        ("Utilidad Neta (Flete − Comisión)", tot_utilidad),
+        ("Margen % (Utilidad / Flete)", f"{round(tot_utilidad/tot_flete*100,1)}%" if tot_flete > 0 else "0%"),
         ("Promedio Flete por Viaje", int(tot_flete/len(df)) if len(df) > 0 else 0),
         ("Promedio Utilidad por Viaje", int(tot_utilidad/len(df)) if len(df) > 0 else 0),
+        ("", ""),
+        ("── Datos Informativos ──", ""),
+        ("Total Bonos Transporte", tot_bono),
+        ("Total Combustible registrado", tot_combustible),
     ]
     ws_f.cell(2,1,"CONCEPTO").font = ft_header
     ws_f.cell(2,1).fill = PatternFill("solid", start_color="1E8449")
@@ -921,9 +976,10 @@ def main():
         # --- Financiero ---
         st.markdown("#### 💰 Datos Financieros")
         fin1, fin2, fin3 = st.columns(3)
-        with fin1: flete_pre    = st.number_input("🚚 Flete ($)",             min_value=0, step=1000, key="pre_flete")
-        with fin2: comision_pre = st.number_input("👤 Comisión conductor ($)", min_value=0, step=1000, key="pre_comision")
-        with fin3: combustible_pre = st.number_input("⛽ Combustible ($)",     min_value=0, step=1000, key="pre_combustible")
+        with fin1: flete_pre    = input_moneda("🚚 Flete ($)",              key="pre_flete")
+        with fin2: comision_pre = input_moneda("👤 Comisión conductor ($)", key="pre_comision")
+        with fin3: combustible_pre = input_moneda("⛽ Combustible ($)",     key="pre_combustible",
+                                                  help_text="Gasto de combustible en esta ruta (informativo)")
 
         # Preview liquidación en tiempo real
         widget_liquidacion(flete_pre, comision_pre, bono_auto, combustible_pre)
@@ -1125,9 +1181,10 @@ def main():
 
                     st.markdown("#### 💰 Datos Financieros")
                     fe1, fe2, fe3 = st.columns(3)
-                    with fe1: e_flete    = st.number_input("Flete ($)",    min_value=0, step=1000, value=int(row.get("flete",0) or 0),       key=f"efl_{vid}")
-                    with fe2: e_comision = st.number_input("Comisión ($)", min_value=0, step=1000, value=int(row.get("comision",0) or 0),     key=f"eco2_{vid}")
-                    with fe3: e_combustible = st.number_input("Combustible ($)", min_value=0, step=1000, value=int(row.get("combustible",0) or 0), key=f"ecomb_{vid}")
+                    with fe1: e_flete    = input_moneda("Flete ($)",    key=f"efl_{vid}",   value=int(row.get("flete",0) or 0))
+                    with fe2: e_comision = input_moneda("Comisión ($)", key=f"eco2_{vid}",  value=int(row.get("comision",0) or 0))
+                    with fe3: e_combustible = input_moneda("Combustible ($)", key=f"ecomb_{vid}", value=int(row.get("combustible",0) or 0),
+                                                           help_text="Gasto de combustible en esta ruta (informativo)")
                     widget_liquidacion(e_flete, e_comision, bono_edit, e_combustible)
 
                     with st.form(f"edit_{vid}"):
@@ -1195,7 +1252,7 @@ def main():
             tot_com_d   = int(df_s["comision"].sum())
             tot_bon_d   = int(df_s["bono_transporte"].sum())
             tot_comb_d  = int(df_s["combustible"].sum())
-            utilidad_d  = tot_flete_d - tot_com_d - tot_bon_d - tot_comb_d
+            utilidad_d  = tot_flete_d - tot_com_d   # Utilidad = Flete - Comisión
             pct = round(comp / total * 100) if total > 0 else 0
 
             k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -1246,7 +1303,7 @@ def main():
                         flete=("flete","sum"), comision=("comision","sum"),
                         bono=("bono_transporte","sum"), comb=("combustible","sum")
                     ).reset_index()
-                    df_uc["utilidad"] = df_uc["flete"] - df_uc["comision"] - df_uc["bono"] - df_uc["comb"]
+                    df_uc["utilidad"] = df_uc["flete"] - df_uc["comision"]  # Utilidad = Flete - Comisión
                     df_uc = df_uc.sort_values("utilidad")
                     fig4 = px.bar(df_uc, x="utilidad", y="conductor", orientation="h",
                                   color="utilidad", color_continuous_scale="Greens", text="utilidad")
@@ -1307,7 +1364,7 @@ def main():
                 comision_c= int(df_cond_t["comision"].sum())
                 bono_c    = int(df_cond_t["bono_transporte"].sum())
                 comb_c    = int(df_cond_t["combustible"].sum())
-                utilidad_c= flete_c - comision_c - bono_c - comb_c
+                utilidad_c= flete_c - comision_c   # Utilidad = Flete - Comisión
 
                 # KPIs conductor
                 st.markdown(f"""
@@ -1364,8 +1421,7 @@ def main():
                 df_det["utilidad"] = (
                     df_det.get("flete", 0).fillna(0).astype(int)
                     - df_det.get("comision", 0).fillna(0).astype(int)
-                    - df_det.get("bono_transporte", 0).fillna(0).astype(int)
-                    - df_det.get("combustible", 0).fillna(0).astype(int)
+                    # Utilidad = Flete - Comisión SOLO
                 )
                 st.dataframe(df_det, use_container_width=True, hide_index=True)
 
