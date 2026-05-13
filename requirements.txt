@@ -1,5 +1,8 @@
-supabase
+streamlit
+psycopg2-binary
 pandas
+pillow
 plotly
 openpyxl
-python-dotenv
+pytz
+reportlab
