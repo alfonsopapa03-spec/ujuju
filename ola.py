@@ -21,20 +21,20 @@ SUPABASE_DB_URL = "postgresql://postgres.ntnpckmbyfmjhfskfwyu:Conejito100#@aws-1
 
 # ==================== CATÁLOGO PLACAS / CONDUCTORES ====================
 PLACA_CONDUCTOR = {
-    "WCP116": "Jose",
-    "SKL440": "Jesus",
-    "SVB345": "Alberto",
-    "VEB931": "Alvaro",
-    "XIC344": "Nilson",
-    "SMD925": "Luis",
-    "SRE493": "Guillermo",
-    "VAG227": "Giovanny",
-    "SOD747": "LEAL",
+    "WCP116": "JOSE MIGUEL",
+    "SKL440": "JESUS GABRIEL",
+    "SVB345": "ALBERTO DE LA CRUZ RONDERO",
+    "VEB931": "ALVARO ANTONIO",
+    "XIC344": "NILSON BERNAL",
+    "SMD925": "LUIS ECHEVERRY",
+    "SRE493": "GUILERMO ENRIQUE",
+    "VAG227": "GIOVANNY JUNIOR",
+    "SOD747": "YOHANIS  JESUS",
 }
 
 TODOS_CONDUCTORES = sorted([
-    "Jose", "Jesus", "Alberto", "Alvaro",
-    "Nilson", "Luis", "Guillermo", "Giovanny", "LEAL"
+    "JOSE MIGUEL", "JESUS GABRIEL", "ALBERTO DE LA CRUZ RONDERO", "ALVARO ANTONIO",
+    "NILSON BERNAL", "LUIS ECHEVERRY", "GUILERMO ENRIQUE", "GIOVANNY JUNIOR", "YOHANIS  JESUS"
 ])
 
 ESTADOS_VIAJE = ["✅ Completado", "❌ Anulado", "⚠️ Incumplido", "🔄 En Curso"]
