@@ -1,5 +1,6 @@
 import streamlit as st
 import psycopg2
+from psycopg2 import pool
 import pandas as pd
 from datetime import datetime, timedelta, time
 import io
@@ -7,6 +8,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 import pytz
+from contextlib import contextmanager
 
 # ==================== CONFIGURACIÓN ====================
 st.set_page_config(
@@ -284,15 +286,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource(show_spinner=False)
-def _get_raw_connection(url: str):
-    """Conexión persistente reutilizada entre re-renders. Se reconecta automáticamente si falla."""
-    return psycopg2.connect(url)
 
+# ==================== POOL DE CONEXIONES ====================
+# Un solo pool compartido para todos los usuarios — thread-safe
 @st.cache_resource(show_spinner=False)
-def get_db():
-    """Instancia única de DB por sesión de servidor — evita re-inicializar la BD en cada re-render."""
-    return DB()
+def get_connection_pool():
+    return pool.ThreadedConnectionPool(
+        minconn=2,
+        maxconn=10,
+        dsn=SUPABASE_DB_URL
+    )
+
 
 # ==================== BASE DE DATOS ====================
 class DB:
@@ -300,166 +304,177 @@ class DB:
         self.url = SUPABASE_DB_URL
         self.init()
 
-    def conn(self):
-        # Intenta reusar la conexión cacheada; si está cerrada o muerta, reconecta
+    @contextmanager
+    def get_conn(self):
+        """
+        Context manager que obtiene una conexión del pool,
+        hace commit al salir o rollback si hay error,
+        y devuelve la conexión al pool siempre.
+        """
+        conn_pool = get_connection_pool()
+        c = conn_pool.getconn()
         try:
-            c = _get_raw_connection(self.url)
-            c.cursor().execute("SELECT 1")
-            return c
-        except Exception:
-            _get_raw_connection.clear()
-            return _get_raw_connection(self.url)
+            yield c
+            c.commit()
+        except Exception as e:
+            c.rollback()
+            raise e
+        finally:
+            conn_pool.putconn(c)
 
     def init(self):
         if st.session_state.get("_db_init_done"):
             return
         try:
-            c = psycopg2.connect(self.url)  # conexión directa en el init para evitar recursión
-            cur = c.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS jp_viajes (
-                    id SERIAL PRIMARY KEY,
-                    fecha_registro TIMESTAMP DEFAULT (now() AT TIME ZONE 'America/Bogota'),
-                    fecha DATE NOT NULL,
-                    placa TEXT NOT NULL,
-                    conductor TEXT,
-                    cliente TEXT,
-                    origen TEXT,
-                    destino TEXT,
-                    hora_cita_cargue TIME,
-                    hora_salida_cargue TIME,
-                    hora_llegada_descargue TIME,
-                    hora_salida_descargue TIME,
-                    contenedor TEXT,
-                    carga TEXT,
-                    numero_factura TEXT,
-                    manifiesto TEXT,
-                    observacion TEXT,
-                    estado TEXT DEFAULT 'Completado',
-                    dias_salida_cargue INTEGER DEFAULT 0,
-                    dias_llegada_descargue INTEGER DEFAULT 0,
-                    dias_salida_descargue INTEGER DEFAULT 0,
-                    flete NUMERIC(12,0) DEFAULT 0,
-                    comision NUMERIC(12,0) DEFAULT 0,
-                    bono_transporte NUMERIC(12,0) DEFAULT 0,
-                    combustible_pesos NUMERIC(12,0) DEFAULT 0,
-                    combustible_galones NUMERIC(8,2) DEFAULT 0
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS jp_tanqueos (
-                    id SERIAL PRIMARY KEY,
-                    fecha_registro TIMESTAMP DEFAULT (now() AT TIME ZONE 'America/Bogota'),
-                    fecha DATE NOT NULL,
-                    placa TEXT NOT NULL,
-                    conductor TEXT,
-                    galones NUMERIC(8,2) NOT NULL,
-                    costo_pesos NUMERIC(12,0) DEFAULT 0,
-                    observacion TEXT
-                )
-            """)
-            migraciones = [
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS flete NUMERIC(12,0) DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS comision NUMERIC(12,0) DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS bono_transporte NUMERIC(12,0) DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS combustible_pesos NUMERIC(12,0) DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS combustible_galones NUMERIC(8,2) DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS numero_factura TEXT",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_salida_cargue INTEGER DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_llegada_descargue INTEGER DEFAULT 0",
-                "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_salida_descargue INTEGER DEFAULT 0",
-                "ALTER TABLE jp_viajes RENAME COLUMN combustible TO combustible_pesos",
-            ]
-            for m in migraciones:
-                try:
-                    cur.execute(m); c.commit()
-                except:
-                    try: c.rollback()
-                    except: pass
-            c.commit(); c.close()
+            with self.get_conn() as c:
+                cur = c.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS jp_viajes (
+                        id SERIAL PRIMARY KEY,
+                        fecha_registro TIMESTAMP DEFAULT (now() AT TIME ZONE 'America/Bogota'),
+                        fecha DATE NOT NULL,
+                        placa TEXT NOT NULL,
+                        conductor TEXT,
+                        cliente TEXT,
+                        origen TEXT,
+                        destino TEXT,
+                        hora_cita_cargue TIME,
+                        hora_salida_cargue TIME,
+                        hora_llegada_descargue TIME,
+                        hora_salida_descargue TIME,
+                        contenedor TEXT,
+                        carga TEXT,
+                        numero_factura TEXT,
+                        manifiesto TEXT,
+                        observacion TEXT,
+                        estado TEXT DEFAULT 'Completado',
+                        dias_salida_cargue INTEGER DEFAULT 0,
+                        dias_llegada_descargue INTEGER DEFAULT 0,
+                        dias_salida_descargue INTEGER DEFAULT 0,
+                        flete NUMERIC(12,0) DEFAULT 0,
+                        comision NUMERIC(12,0) DEFAULT 0,
+                        bono_transporte NUMERIC(12,0) DEFAULT 0,
+                        combustible_pesos NUMERIC(12,0) DEFAULT 0,
+                        combustible_galones NUMERIC(8,2) DEFAULT 0
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS jp_tanqueos (
+                        id SERIAL PRIMARY KEY,
+                        fecha_registro TIMESTAMP DEFAULT (now() AT TIME ZONE 'America/Bogota'),
+                        fecha DATE NOT NULL,
+                        placa TEXT NOT NULL,
+                        conductor TEXT,
+                        galones NUMERIC(8,2) NOT NULL,
+                        costo_pesos NUMERIC(12,0) DEFAULT 0,
+                        observacion TEXT
+                    )
+                """)
+                # Migraciones seguras — IF NOT EXISTS evita errores en concurrencia
+                migraciones = [
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS flete NUMERIC(12,0) DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS comision NUMERIC(12,0) DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS bono_transporte NUMERIC(12,0) DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS combustible_pesos NUMERIC(12,0) DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS combustible_galones NUMERIC(8,2) DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS numero_factura TEXT",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_salida_cargue INTEGER DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_llegada_descargue INTEGER DEFAULT 0",
+                    "ALTER TABLE jp_viajes ADD COLUMN IF NOT EXISTS dias_salida_descargue INTEGER DEFAULT 0",
+                ]
+                for m in migraciones:
+                    try:
+                        cur.execute(m)
+                    except Exception:
+                        pass  # columna ya existe, ignorar
             st.session_state["_db_init_done"] = True
         except Exception as e:
             st.error(f"Error DB init: {e}")
 
     def guardar_viaje(self, datos: dict) -> bool:
         try:
-            c = self.conn(); cur = c.cursor()
-            cur.execute("""
-                INSERT INTO jp_viajes
-                (fecha, placa, conductor, cliente, origen, destino,
-                 hora_cita_cargue, hora_salida_cargue, hora_llegada_descargue, hora_salida_descargue,
-                 contenedor, carga, numero_factura, manifiesto, observacion, estado,
-                 dias_salida_cargue, dias_llegada_descargue, dias_salida_descargue,
-                 flete, comision, bono_transporte, combustible_pesos, combustible_galones)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (
-                datos["fecha"], datos["placa"], datos["conductor"], datos["cliente"],
-                datos["origen"], datos["destino"],
-                datos["hora_cita_cargue"], datos["hora_salida_cargue"],
-                datos["hora_llegada_descargue"], datos["hora_salida_descargue"],
-                datos["contenedor"], datos["carga"],
-                datos["numero_factura"], datos["manifiesto"],
-                datos["observacion"], datos["estado"],
-                datos.get("dias_salida_cargue", 0),
-                datos.get("dias_llegada_descargue", 0),
-                datos.get("dias_salida_descargue", 0),
-                datos.get("flete", 0),
-                datos.get("comision", 0),
-                datos.get("bono_transporte", 0),
-                datos.get("combustible_pesos", 0),
-                datos.get("combustible_galones", 0),
-            ))
-            c.commit(); c.close(); return True
+            with self.get_conn() as c:
+                cur = c.cursor()
+                cur.execute("""
+                    INSERT INTO jp_viajes
+                    (fecha, placa, conductor, cliente, origen, destino,
+                     hora_cita_cargue, hora_salida_cargue, hora_llegada_descargue, hora_salida_descargue,
+                     contenedor, carga, numero_factura, manifiesto, observacion, estado,
+                     dias_salida_cargue, dias_llegada_descargue, dias_salida_descargue,
+                     flete, comision, bono_transporte, combustible_pesos, combustible_galones)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    datos["fecha"], datos["placa"], datos["conductor"], datos["cliente"],
+                    datos["origen"], datos["destino"],
+                    datos["hora_cita_cargue"], datos["hora_salida_cargue"],
+                    datos["hora_llegada_descargue"], datos["hora_salida_descargue"],
+                    datos["contenedor"], datos["carga"],
+                    datos["numero_factura"], datos["manifiesto"],
+                    datos["observacion"], datos["estado"],
+                    datos.get("dias_salida_cargue", 0),
+                    datos.get("dias_llegada_descargue", 0),
+                    datos.get("dias_salida_descargue", 0),
+                    datos.get("flete", 0),
+                    datos.get("comision", 0),
+                    datos.get("bono_transporte", 0),
+                    datos.get("combustible_pesos", 0),
+                    datos.get("combustible_galones", 0),
+                ))
+            return True
         except Exception as e:
-            st.error(f"Error guardando: {e}"); return False
+            st.error(f"Error guardando: {e}")
+            return False
 
     def actualizar_viaje(self, viaje_id: int, datos: dict) -> bool:
         try:
-            c = self.conn(); cur = c.cursor()
-            cur.execute("""
-                UPDATE jp_viajes SET
-                fecha=%s, placa=%s, conductor=%s, cliente=%s, origen=%s, destino=%s,
-                hora_cita_cargue=%s, hora_salida_cargue=%s,
-                hora_llegada_descargue=%s, hora_salida_descargue=%s,
-                contenedor=%s, carga=%s, numero_factura=%s,
-                manifiesto=%s, observacion=%s, estado=%s,
-                dias_salida_cargue=%s, dias_llegada_descargue=%s, dias_salida_descargue=%s,
-                flete=%s, comision=%s, bono_transporte=%s, combustible_pesos=%s, combustible_galones=%s
-                WHERE id=%s
-            """, (
-                datos["fecha"], datos["placa"], datos["conductor"], datos["cliente"],
-                datos["origen"], datos["destino"],
-                datos["hora_cita_cargue"], datos["hora_salida_cargue"],
-                datos["hora_llegada_descargue"], datos["hora_salida_descargue"],
-                datos["contenedor"], datos["carga"],
-                datos["numero_factura"], datos["manifiesto"],
-                datos["observacion"], datos["estado"],
-                datos.get("dias_salida_cargue", 0),
-                datos.get("dias_llegada_descargue", 0),
-                datos.get("dias_salida_descargue", 0),
-                datos.get("flete", 0),
-                datos.get("comision", 0),
-                datos.get("bono_transporte", 0),
-                datos.get("combustible_pesos", 0),
-                datos.get("combustible_galones", 0),
-                viaje_id
-            ))
-            c.commit(); c.close(); return True
+            with self.get_conn() as c:
+                cur = c.cursor()
+                cur.execute("""
+                    UPDATE jp_viajes SET
+                    fecha=%s, placa=%s, conductor=%s, cliente=%s, origen=%s, destino=%s,
+                    hora_cita_cargue=%s, hora_salida_cargue=%s,
+                    hora_llegada_descargue=%s, hora_salida_descargue=%s,
+                    contenedor=%s, carga=%s, numero_factura=%s,
+                    manifiesto=%s, observacion=%s, estado=%s,
+                    dias_salida_cargue=%s, dias_llegada_descargue=%s, dias_salida_descargue=%s,
+                    flete=%s, comision=%s, bono_transporte=%s, combustible_pesos=%s, combustible_galones=%s
+                    WHERE id=%s
+                """, (
+                    datos["fecha"], datos["placa"], datos["conductor"], datos["cliente"],
+                    datos["origen"], datos["destino"],
+                    datos["hora_cita_cargue"], datos["hora_salida_cargue"],
+                    datos["hora_llegada_descargue"], datos["hora_salida_descargue"],
+                    datos["contenedor"], datos["carga"],
+                    datos["numero_factura"], datos["manifiesto"],
+                    datos["observacion"], datos["estado"],
+                    datos.get("dias_salida_cargue", 0),
+                    datos.get("dias_llegada_descargue", 0),
+                    datos.get("dias_salida_descargue", 0),
+                    datos.get("flete", 0),
+                    datos.get("comision", 0),
+                    datos.get("bono_transporte", 0),
+                    datos.get("combustible_pesos", 0),
+                    datos.get("combustible_galones", 0),
+                    viaje_id
+                ))
+            return True
         except Exception as e:
-            st.error(f"Error actualizando: {e}"); return False
+            st.error(f"Error actualizando: {e}")
+            return False
 
     def eliminar_viaje(self, viaje_id: int) -> bool:
         try:
-            c = self.conn(); cur = c.cursor()
-            cur.execute("DELETE FROM jp_viajes WHERE id=%s", (viaje_id,))
-            c.commit(); c.close(); return True
+            with self.get_conn() as c:
+                cur = c.cursor()
+                cur.execute("DELETE FROM jp_viajes WHERE id=%s", (viaje_id,))
+            return True
         except Exception as e:
-            st.error(f"Error eliminando: {e}"); return False
+            st.error(f"Error eliminando: {e}")
+            return False
 
     def obtener_viajes(self, fecha_ini=None, fecha_fin=None, placa=None,
                        conductor=None, cliente=None, estado=None,
                        manifiesto=None, numero_factura=None) -> pd.DataFrame:
-        c = self.conn()
         q = """SELECT id, fecha, placa, conductor, cliente, origen, destino,
                       hora_cita_cargue, hora_salida_cargue,
                       hora_llegada_descargue, hora_salida_descargue,
@@ -485,58 +500,61 @@ class DB:
         if numero_factura: q += " AND numero_factura ILIKE %s"; params.append(f"%{numero_factura}%")
         q += " ORDER BY fecha DESC, id DESC"
         try:
-            df = pd.read_sql(q, c, params=params); return df
-        except: return pd.DataFrame()
-        finally: c.close()
+            with self.get_conn() as c:
+                return pd.read_sql(q, c, params=params)
+        except Exception:
+            return pd.DataFrame()
 
     def stats_dashboard(self, fecha_ini, fecha_fin):
-        c = self.conn()
         try:
-            df = pd.read_sql("""
-                SELECT fecha, placa, conductor, cliente, estado,
-                       hora_cita_cargue, hora_salida_cargue,
-                       hora_llegada_descargue, hora_salida_descargue,
-                       COALESCE(dias_salida_cargue,0) as dias_salida_cargue,
-                       COALESCE(dias_llegada_descargue,0) as dias_llegada_descargue,
-                       COALESCE(dias_salida_descargue,0) as dias_salida_descargue,
-                       COALESCE(flete,0) as flete,
-                       COALESCE(comision,0) as comision,
-                       COALESCE(bono_transporte,0) as bono_transporte,
-                       COALESCE(combustible_pesos,0) as combustible_pesos,
-                       COALESCE(combustible_galones,0) as combustible_galones
-                FROM jp_viajes
-                WHERE fecha >= %s AND fecha <= %s
-                ORDER BY fecha
-            """, c, params=[fecha_ini, fecha_fin])
-            return df
-        except: return pd.DataFrame()
-        finally: c.close()
+            with self.get_conn() as c:
+                return pd.read_sql("""
+                    SELECT fecha, placa, conductor, cliente, estado,
+                           hora_cita_cargue, hora_salida_cargue,
+                           hora_llegada_descargue, hora_salida_descargue,
+                           COALESCE(dias_salida_cargue,0) as dias_salida_cargue,
+                           COALESCE(dias_llegada_descargue,0) as dias_llegada_descargue,
+                           COALESCE(dias_salida_descargue,0) as dias_salida_descargue,
+                           COALESCE(flete,0) as flete,
+                           COALESCE(comision,0) as comision,
+                           COALESCE(bono_transporte,0) as bono_transporte,
+                           COALESCE(combustible_pesos,0) as combustible_pesos,
+                           COALESCE(combustible_galones,0) as combustible_galones
+                    FROM jp_viajes
+                    WHERE fecha >= %s AND fecha <= %s
+                    ORDER BY fecha
+                """, c, params=[fecha_ini, fecha_fin])
+        except Exception:
+            return pd.DataFrame()
 
     # ==================== TANQUEOS ====================
     def guardar_tanqueo(self, datos: dict) -> bool:
         try:
-            c = self.conn(); cur = c.cursor()
-            cur.execute("""
-                INSERT INTO jp_tanqueos (fecha, placa, conductor, galones, costo_pesos, observacion)
-                VALUES (%s,%s,%s,%s,%s,%s)
-            """, (
-                datos["fecha"], datos["placa"], datos["conductor"],
-                datos["galones"], datos["costo_pesos"], datos.get("observacion","")
-            ))
-            c.commit(); c.close(); return True
+            with self.get_conn() as c:
+                cur = c.cursor()
+                cur.execute("""
+                    INSERT INTO jp_tanqueos (fecha, placa, conductor, galones, costo_pesos, observacion)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                """, (
+                    datos["fecha"], datos["placa"], datos["conductor"],
+                    datos["galones"], datos["costo_pesos"], datos.get("observacion", "")
+                ))
+            return True
         except Exception as e:
-            st.error(f"Error guardando tanqueo: {e}"); return False
+            st.error(f"Error guardando tanqueo: {e}")
+            return False
 
     def eliminar_tanqueo(self, tanqueo_id: int) -> bool:
         try:
-            c = self.conn(); cur = c.cursor()
-            cur.execute("DELETE FROM jp_tanqueos WHERE id=%s", (tanqueo_id,))
-            c.commit(); c.close(); return True
+            with self.get_conn() as c:
+                cur = c.cursor()
+                cur.execute("DELETE FROM jp_tanqueos WHERE id=%s", (tanqueo_id,))
+            return True
         except Exception as e:
-            st.error(f"Error eliminando tanqueo: {e}"); return False
+            st.error(f"Error eliminando tanqueo: {e}")
+            return False
 
     def obtener_tanqueos(self, placa=None, fecha_ini=None, fecha_fin=None) -> pd.DataFrame:
-        c = self.conn()
         q = "SELECT * FROM jp_tanqueos WHERE 1=1"
         params = []
         if placa and placa != "Todas": q += " AND placa = %s"; params.append(placa)
@@ -544,21 +562,22 @@ class DB:
         if fecha_fin: q += " AND fecha <= %s"; params.append(fecha_fin)
         q += " ORDER BY fecha DESC, id DESC"
         try:
-            return pd.read_sql(q, c, params=params)
-        except: return pd.DataFrame()
-        finally: c.close()
+            with self.get_conn() as c:
+                return pd.read_sql(q, c, params=params)
+        except Exception:
+            return pd.DataFrame()
 
     def saldo_combustible_placa(self, placa: str) -> dict:
-        c = self.conn()
         try:
-            df_t = pd.read_sql(
-                "SELECT fecha, galones, costo_pesos, 'TANQUEO' as tipo, observacion FROM jp_tanqueos WHERE placa=%s ORDER BY fecha, id",
-                c, params=[placa]
-            )
-            df_v = pd.read_sql(
-                "SELECT fecha, COALESCE(combustible_galones,0) as galones, COALESCE(combustible_pesos,0) as costo_pesos, 'CONSUMO' as tipo, CONCAT('Viaje ', CAST(id AS TEXT)) as observacion FROM jp_viajes WHERE placa=%s AND COALESCE(combustible_galones,0)>0 ORDER BY fecha, id",
-                c, params=[placa]
-            )
+            with self.get_conn() as c:
+                df_t = pd.read_sql(
+                    "SELECT fecha, galones, costo_pesos, 'TANQUEO' as tipo, observacion FROM jp_tanqueos WHERE placa=%s ORDER BY fecha, id",
+                    c, params=[placa]
+                )
+                df_v = pd.read_sql(
+                    "SELECT fecha, COALESCE(combustible_galones,0) as galones, COALESCE(combustible_pesos,0) as costo_pesos, 'CONSUMO' as tipo, CONCAT('Viaje ', CAST(id AS TEXT)) as observacion FROM jp_viajes WHERE placa=%s AND COALESCE(combustible_galones,0)>0 ORDER BY fecha, id",
+                    c, params=[placa]
+                )
             total_tanqueado = float(df_t["galones"].sum()) if not df_t.empty else 0.0
             total_consumido = float(df_v["galones"].sum()) if not df_v.empty else 0.0
             saldo = total_tanqueado - total_consumido
@@ -584,14 +603,22 @@ class DB:
                 "saldo": round(saldo, 2),
                 "historial": df_hist
             }
-        except Exception as e:
+        except Exception:
             return {"total_tanqueado": 0, "total_consumido": 0, "saldo": 0, "historial": pd.DataFrame()}
-        finally:
-            c.close()
+
+
+# ==================== INSTANCIA DB POR SESIÓN ====================
+# Cada usuario tiene su propia instancia en session_state —
+# evita que una sesión interfiera con otra y no hay caché global de conexiones.
+def get_db() -> DB:
+    if "db_instance" not in st.session_state:
+        st.session_state["db_instance"] = DB()
+    return st.session_state["db_instance"]
 
 
 # ==================== CACHÉ DE CONSULTAS ====================
-# El underscore en _db hace que st.cache_data no intente hashear el objeto DB
+# TTL corto (30s) para que los datos se refresquen rápido entre usuarios.
+# El underscore en _db hace que st.cache_data no intente hashear el objeto DB.
 @st.cache_data(ttl=30, show_spinner=False)
 def q_obtener_viajes(_db, fecha_ini=None, fecha_fin=None, placa=None,
                      conductor=None, cliente=None, estado=None,
@@ -611,9 +638,18 @@ def q_obtener_tanqueos(_db, placa=None, fecha_ini=None, fecha_fin=None):
 def q_saldo_combustible_placa(_db, placa: str):
     return _db.saldo_combustible_placa(placa)
 
+
 def limpiar_cache():
-    """Llama esto después de cualquier escritura para que los datos se refresquen."""
-    st.cache_data.clear()
+    """
+    Limpia solo las funciones de consulta, no el pool de conexiones.
+    Se llama después de cualquier escritura para refrescar datos.
+    """
+    q_obtener_viajes.clear()
+    q_stats_dashboard.clear()
+    q_obtener_tanqueos.clear()
+    q_saldo_combustible_placa.clear()
+
+
 def hora_a_time(val):
     if val is None or (isinstance(val, float) and pd.isna(val)): return None
     if isinstance(val, time): return val
@@ -688,12 +724,6 @@ def widget_horas(prefix, val_cita=None, val_sal_cargue=None,
 
 # ==================== WIDGET LIQUIDACIÓN ====================
 def widget_liquidacion(flete, comision, bono, combustible_pesos, combustible_galones=0):
-    """
-    Liquidación = Flete - Comisión SOLAMENTE.
-    Bono y combustible se muestran como datos informativos, NO restan.
-    Nota: se usan entidades HTML en lugar de emojis y caracteres especiales
-    para evitar que el parser de markdown de Streamlit corte el HTML.
-    """
     utilidad   = int(flete or 0) - int(comision or 0)
     color_util = "#2ecc71" if utilidad >= 0 else "#e74c3c"
     show_bono  = "flex" if int(bono or 0) > 0 else "none"
